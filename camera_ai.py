@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
-from openai import OpenAI
+import google.generativeai as genai
 
 
 @dataclass
@@ -24,7 +24,7 @@ def load_api_key(from_cli: str | None) -> str:
     if from_cli:
         return from_cli.strip()
 
-    env_key = os.getenv('OPENAI_API_KEY', '').strip()
+    env_key = os.getenv('GEMINI_API_KEY', '').strip()
     if env_key:
         return env_key
 
@@ -35,45 +35,41 @@ def load_api_key(from_cli: str | None) -> str:
             if not line or line.startswith('#') or '=' not in line:
                 continue
             key, value = line.split('=', 1)
-            if key.strip() == 'OPENAI_API_KEY':
+            if key.strip() == 'GEMINI_API_KEY':
                 return value.strip().strip('"').strip("'")
 
-    manual_key = getpass.getpass('未检测到 API Key，请直接输入 OpenAI API Key（输入不回显）: ').strip()
+    manual_key = getpass.getpass('未检测到 Gemini API Key，请直接输入（输入不回显）: ').strip()
     if manual_key:
         return manual_key
 
     raise EnvironmentError(
-        '未找到 OpenAI API Key。请任选其一：\n'
-        '1) 命令行参数：python camera_ai.py --api-key "sk-..."\n'
-        '2) 环境变量（Windows PowerShell）：$env:OPENAI_API_KEY="sk-..."\n'
-        '3) 在脚本同目录创建 .env 文件并写入：OPENAI_API_KEY=sk-...\n'
+        '未找到 Gemini API Key。请任选其一：\n'
+        '1) 命令行参数：python camera_ai.py --api-key "AIza..."\n'
+        '2) 环境变量（Windows PowerShell）：$env:GEMINI_API_KEY="AIza..."\n'
+        '3) 在脚本同目录创建 .env 文件并写入：GEMINI_API_KEY=AIza...\n'
         '4) 启动后按提示手动输入 API Key'
     )
 
 
-def encode_frame_to_data_url(frame) -> str:
+def encode_frame_to_jpeg_bytes(frame) -> bytes:
     ok, buffer = cv2.imencode('.jpg', frame)
     if not ok:
         raise RuntimeError('无法将摄像头画面编码为 JPG')
-    b64 = base64.b64encode(buffer).decode('utf-8')
-    return f'data:image/jpeg;base64,{b64}'
+    return buffer.tobytes()
 
 
-def analyze_frame(client: OpenAI, frame, model: str, prompt: str) -> str:
-    image_data_url = encode_frame_to_data_url(frame)
-    response = client.responses.create(
-        model=model,
-        input=[
+def analyze_frame(model: genai.GenerativeModel, frame, prompt: str) -> str:
+    image_bytes = encode_frame_to_jpeg_bytes(frame)
+    response = model.generate_content(
+        [
+            prompt,
             {
-                'role': 'user',
-                'content': [
-                    {'type': 'input_text', 'text': prompt},
-                    {'type': 'input_image', 'image_url': image_data_url},
-                ],
-            }
-        ],
+                'mime_type': 'image/jpeg',
+                'data': image_bytes,
+            },
+        ]
     )
-    return response.output_text.strip()
+    return (response.text or '').strip()
 
 
 def run(config: CameraAIConfig) -> None:
@@ -81,11 +77,12 @@ def run(config: CameraAIConfig) -> None:
     if not cap.isOpened():
         raise RuntimeError(f'无法打开摄像头 index={config.camera_index}')
 
-    client = OpenAI(api_key=config.api_key)
+    genai.configure(api_key=config.api_key)
+    model = genai.GenerativeModel(config.model)
     last_sent = 0.0
 
     print('摄像头已开启。按 q 退出。')
-    print(f'每 {config.interval} 秒发送一帧给 AI 分析...')
+    print(f'每 {config.interval} 秒发送一帧给 Gemini 分析...')
 
     try:
         while True:
@@ -101,12 +98,12 @@ def run(config: CameraAIConfig) -> None:
             if now - last_sent >= config.interval:
                 last_sent = now
                 try:
-                    result = analyze_frame(client, frame, config.model, config.prompt)
+                    result = analyze_frame(model, frame, config.prompt)
                     print('-' * 60)
-                    print(f'[{time.strftime("%H:%M:%S")}] AI 分析结果：')
+                    print(f'[{time.strftime("%H:%M:%S")}] Gemini 分析结果：')
                     print(result or '(空结果)')
                 except Exception as exc:
-                    print(f'调用 AI 接口失败: {exc}')
+                    print(f'调用 Gemini 接口失败: {exc}')
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
@@ -119,12 +116,12 @@ def run(config: CameraAIConfig) -> None:
 
 def parse_args() -> CameraAIConfig:
     parser = argparse.ArgumentParser(
-        description='调用电脑摄像头并将画面通过 API 发给 AI 分析。'
+        description='调用电脑摄像头并将画面通过 Gemini API 发给 AI 分析。'
     )
     parser.add_argument(
         '--model',
-        default='gpt-4.1-mini',
-        help='用于图像分析的模型名 (默认: gpt-4.1-mini)',
+        default='gemini-1.5-flash',
+        help='用于图像分析的 Gemini 模型名 (默认: gemini-1.5-flash)',
     )
     parser.add_argument(
         '--prompt',
@@ -151,7 +148,7 @@ def parse_args() -> CameraAIConfig:
     parser.add_argument(
         '--api-key',
         default=None,
-        help='可直接传入 OpenAI API Key；未传时自动尝试环境变量、.env 或启动时输入',
+        help='可直接传入 Gemini API Key；未传时自动尝试环境变量、.env 或启动时输入',
     )
 
     args = parser.parse_args()

@@ -1,8 +1,10 @@
 import argparse
 import base64
+import getpass
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import cv2
 from openai import OpenAI
@@ -15,6 +17,38 @@ class CameraAIConfig:
     camera_index: int
     interval: float
     show_window: bool
+    api_key: str
+
+
+def load_api_key(from_cli: str | None) -> str:
+    if from_cli:
+        return from_cli.strip()
+
+    env_key = os.getenv('OPENAI_API_KEY', '').strip()
+    if env_key:
+        return env_key
+
+    env_file = Path('.env')
+    if env_file.exists():
+        for raw_line in env_file.read_text(encoding='utf-8').splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            if key.strip() == 'OPENAI_API_KEY':
+                return value.strip().strip('"').strip("'")
+
+    manual_key = getpass.getpass('未检测到 API Key，请直接输入 OpenAI API Key（输入不回显）: ').strip()
+    if manual_key:
+        return manual_key
+
+    raise EnvironmentError(
+        '未找到 OpenAI API Key。请任选其一：\n'
+        '1) 命令行参数：python camera_ai.py --api-key "sk-..."\n'
+        '2) 环境变量（Windows PowerShell）：$env:OPENAI_API_KEY="sk-..."\n'
+        '3) 在脚本同目录创建 .env 文件并写入：OPENAI_API_KEY=sk-...\n'
+        '4) 启动后按提示手动输入 API Key'
+    )
 
 
 def encode_frame_to_data_url(frame) -> str:
@@ -43,14 +77,11 @@ def analyze_frame(client: OpenAI, frame, model: str, prompt: str) -> str:
 
 
 def run(config: CameraAIConfig) -> None:
-    if not os.getenv('OPENAI_API_KEY'):
-        raise EnvironmentError('请先设置 OPENAI_API_KEY 环境变量')
-
     cap = cv2.VideoCapture(config.camera_index)
     if not cap.isOpened():
         raise RuntimeError(f'无法打开摄像头 index={config.camera_index}')
 
-    client = OpenAI()
+    client = OpenAI(api_key=config.api_key)
     last_sent = 0.0
 
     print('摄像头已开启。按 q 退出。')
@@ -117,6 +148,11 @@ def parse_args() -> CameraAIConfig:
         action='store_true',
         help='不显示本地摄像头预览窗口',
     )
+    parser.add_argument(
+        '--api-key',
+        default=None,
+        help='可直接传入 OpenAI API Key；未传时自动尝试环境变量、.env 或启动时输入',
+    )
 
     args = parser.parse_args()
     return CameraAIConfig(
@@ -125,6 +161,7 @@ def parse_args() -> CameraAIConfig:
         camera_index=args.camera_index,
         interval=max(0.5, args.interval),
         show_window=not args.no_window,
+        api_key=load_api_key(args.api_key),
     )
 
 

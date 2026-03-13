@@ -1,5 +1,4 @@
 import argparse
-import base64
 import getpass
 import os
 import time
@@ -7,7 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 
 @dataclass
@@ -58,16 +58,14 @@ def encode_frame_to_jpeg_bytes(frame) -> bytes:
     return buffer.tobytes()
 
 
-def analyze_frame(model: genai.GenerativeModel, frame, prompt: str) -> str:
+def analyze_frame(client: genai.Client, model: str, frame, prompt: str) -> str:
     image_bytes = encode_frame_to_jpeg_bytes(frame)
-    response = model.generate_content(
-        [
+    response = client.models.generate_content(
+        model=model,
+        contents=[
             prompt,
-            {
-                'mime_type': 'image/jpeg',
-                'data': image_bytes,
-            },
-        ]
+            types.Part.from_bytes(data=image_bytes, mime_type='image/jpeg'),
+        ],
     )
     return (response.text or '').strip()
 
@@ -77,8 +75,7 @@ def run(config: CameraAIConfig) -> None:
     if not cap.isOpened():
         raise RuntimeError(f'无法打开摄像头 index={config.camera_index}')
 
-    genai.configure(api_key=config.api_key)
-    model = genai.GenerativeModel(config.model)
+    client = genai.Client(api_key=config.api_key)
     last_sent = 0.0
 
     print('摄像头已开启。按 q 退出。')
@@ -98,7 +95,7 @@ def run(config: CameraAIConfig) -> None:
             if now - last_sent >= config.interval:
                 last_sent = now
                 try:
-                    result = analyze_frame(model, frame, config.prompt)
+                    result = analyze_frame(client, config.model, frame, config.prompt)
                     print('-' * 60)
                     print(f'[{time.strftime("%H:%M:%S")}] Gemini 分析结果：')
                     print(result or '(空结果)')

@@ -1,9 +1,9 @@
-# Camera to Gemini Demo
+# Camera to Gemini Demo (google.genai)
 
 一个最小可运行示例：
 1. 调用电脑摄像头实时读取画面。
 2. 每隔固定时间抓取一帧。
-3. 通过 Gemini API 把图片发送给 AI。
+3. 通过 Gemini API（google.genai SDK）把图片发送给 AI。
 4. 在终端输出 AI 返回的分析结果。
 
 ## 1) 安装依赖

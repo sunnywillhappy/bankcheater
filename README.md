@@ -14,42 +14,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Windows（PowerShell）可用：
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-## 2) 配置 API Key（3 选 1）
-
-### 方式 A：命令行直接传
+## 2) 设置 API Key
 
 ```bash
-python camera_ai.py --api-key "sk-..."
-```
-
-### 方式 B：环境变量
-
-Linux / macOS:
-
-```bash
-export OPENAI_API_KEY="sk-..."
-```
-
-Windows PowerShell:
-
-```powershell
-$env:OPENAI_API_KEY="sk-..."
-```
-
-### 方式 C：在项目根目录放 `.env`
-
-创建 `.env` 文件并写入：
-
-```env
-OPENAI_API_KEY=sk-...
+export OPENAI_API_KEY="你的key"
 ```
 
 ## 3) 运行
@@ -69,11 +37,6 @@ python camera_ai.py \
 ```
 
 按 `q` 退出。
-
-## 常见问题
-
-- 报错 `未找到 OpenAI API Key`：请按“配置 API Key”里的任一方式设置。
-- 摄像头打不开：尝试 `--camera-index 1` 或检查系统隐私权限中是否允许 Python 访问摄像头。
 
 ## 说明
 

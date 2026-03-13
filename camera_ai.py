@@ -18,6 +18,7 @@ class CameraAIConfig:
     interval: float
     show_window: bool
     api_key: str
+    strict_model: bool
 
 
 def load_api_key(from_cli: str | None) -> str:
@@ -51,6 +52,79 @@ def load_api_key(from_cli: str | None) -> str:
     )
 
 
+def validate_api_key_format(api_key: str) -> None:
+    if not api_key.startswith('AIza'):
+        raise ValueError(
+            'Gemini API Key 格式看起来不对（通常以 "AIza" 开头）。\n'
+            '请确认你粘贴的是 Google AI Studio 的 API Key，而不是其他平台的密钥。'
+        )
+
+
+def list_generate_content_models(client: genai.Client) -> list[str]:
+    models = []
+    for m in client.models.list():
+        supported = getattr(m, 'supported_actions', None) or []
+        name = getattr(m, 'name', '')
+        if not name:
+            continue
+        if 'generateContent' in supported:
+            models.append(name.replace('models/', ''))
+    return models
+
+
+def pick_fallback_model(available_models: list[str]) -> str | None:
+    if not available_models:
+        return None
+    for name in available_models:
+        if 'flash' in name:
+            return name
+    return available_models[0]
+
+
+def preflight_check(client: genai.Client, model: str, strict_model: bool) -> str:
+    try:
+        client.models.generate_content(
+            model=model,
+            contents='Reply with OK only.',
+        )
+        return model
+    except Exception as exc:
+        msg = str(exc)
+        if '404' in msg and 'not found' in msg.lower():
+            available_models = list_generate_content_models(client)
+            if strict_model:
+                raise RuntimeError(
+                    '指定模型不可用（404 NOT_FOUND）。\n'
+                    f'你传入: {model}\n'
+                    f'当前可用于 generateContent 的模型: {available_models[:10]}'
+                ) from exc
+
+            fallback = pick_fallback_model(available_models)
+            if fallback:
+                print(f'⚠️ 指定模型 {model} 不可用，自动切换到: {fallback}')
+                return fallback
+
+            raise RuntimeError(
+                '指定模型不可用（404 NOT_FOUND），且无法获取可用模型列表。\n'
+                '请检查网络是否可访问 Gemini API，或稍后重试。'
+            ) from exc
+
+        if '400' in msg:
+            raise RuntimeError(
+                'Gemini 返回 400 Bad Request。常见原因：\n'
+                '1) API Key 无效/粘贴错误（请重新生成并粘贴）\n'
+                '2) 使用了不可用模型名（可尝试 --model gemini-2.0-flash）\n'
+                '3) 网络环境拦截了 Google 接口，返回 HTML 错误页\n'
+                f'原始错误: {msg}'
+            ) from exc
+        if '401' in msg or '403' in msg:
+            raise RuntimeError(
+                'Gemini 鉴权失败（401/403）。请检查 API Key 是否正确、是否有权限。\n'
+                f'原始错误: {msg}'
+            ) from exc
+        raise RuntimeError(f'Gemini 预检查失败: {msg}') from exc
+
+
 def encode_frame_to_jpeg_bytes(frame) -> bytes:
     ok, buffer = cv2.imencode('.jpg', frame)
     if not ok:
@@ -71,13 +145,19 @@ def analyze_frame(client: genai.Client, model: str, frame, prompt: str) -> str:
 
 
 def run(config: CameraAIConfig) -> None:
+    validate_api_key_format(config.api_key)
+
+    client = genai.Client(api_key=config.api_key)
+    active_model = preflight_check(client, config.model, config.strict_model)
+
     cap = cv2.VideoCapture(config.camera_index)
     if not cap.isOpened():
         raise RuntimeError(f'无法打开摄像头 index={config.camera_index}')
 
-    client = genai.Client(api_key=config.api_key)
     last_sent = 0.0
 
+    print('Gemini 连接检查通过。')
+    print(f'当前模型: {active_model}')
     print('摄像头已开启。按 q 退出。')
     print(f'每 {config.interval} 秒发送一帧给 Gemini 分析...')
 
@@ -95,7 +175,7 @@ def run(config: CameraAIConfig) -> None:
             if now - last_sent >= config.interval:
                 last_sent = now
                 try:
-                    result = analyze_frame(client, config.model, frame, config.prompt)
+                    result = analyze_frame(client, active_model, frame, config.prompt)
                     print('-' * 60)
                     print(f'[{time.strftime("%H:%M:%S")}] Gemini 分析结果：')
                     print(result or '(空结果)')
@@ -117,8 +197,8 @@ def parse_args() -> CameraAIConfig:
     )
     parser.add_argument(
         '--model',
-        default='gemini-1.5-flash',
-        help='用于图像分析的 Gemini 模型名 (默认: gemini-1.5-flash)',
+        default='gemini-2.0-flash',
+        help='用于图像分析的 Gemini 模型名 (默认: gemini-2.0-flash)',
     )
     parser.add_argument(
         '--prompt',
@@ -147,6 +227,11 @@ def parse_args() -> CameraAIConfig:
         default=None,
         help='可直接传入 Gemini API Key；未传时自动尝试环境变量、.env 或启动时输入',
     )
+    parser.add_argument(
+        '--strict-model',
+        action='store_true',
+        help='模型不可用时不自动回退，直接报错退出',
+    )
 
     args = parser.parse_args()
     return CameraAIConfig(
@@ -156,6 +241,7 @@ def parse_args() -> CameraAIConfig:
         interval=max(0.5, args.interval),
         show_window=not args.no_window,
         api_key=load_api_key(args.api_key),
+        strict_model=args.strict_model,
     )
 
 
